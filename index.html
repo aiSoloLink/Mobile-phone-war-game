@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>War Game — Prototype (Stage 1)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; background: #000; font-family: -apple-system, system-ui, sans-serif; }
+  #app { position: fixed; inset: 0; }
+
+  video, #overlay {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  #overlay { pointer-events: none; }
+
+  /* Red damage / hit flash */
+  #flash {
+    position: absolute; inset: 0; background: #ff2b2b;
+    opacity: 0; pointer-events: none; transition: opacity 0.08s ease-out;
+  }
+  #flash.show { opacity: 0.5; transition: none; }
+
+  /* Top status bar */
+  #status {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: 14px 16px;
+    display: flex; justify-content: space-between; align-items: center;
+    color: #fff; font-size: 15px; font-weight: 600;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+    z-index: 5;
+  }
+  #lockLabel { padding: 4px 12px; border-radius: 20px; background: rgba(0,0,0,0.4); }
+  #lockLabel.locked { background: #16c60c; color: #001b00; }
+
+  /* Center message (HIT / MISS) */
+  #centerMsg {
+    position: absolute; top: 32%; left: 0; right: 0;
+    text-align: center; font-size: 64px; font-weight: 800;
+    color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,0.9);
+    opacity: 0; transition: opacity 0.25s; z-index: 6;
+  }
+  #centerMsg.show { opacity: 1; transition: none; }
+
+  /* Shoot button */
+  #shoot {
+    position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+    width: 96px; height: 96px; border-radius: 50%;
+    background: radial-gradient(circle at 50% 35%, #ff6b6b, #d31027);
+    border: 5px solid rgba(255,255,255,0.85);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+    color: #fff; font-size: 17px; font-weight: 800; letter-spacing: 1px;
+    z-index: 7; cursor: pointer; user-select: none;
+  }
+  #shoot:active { transform: translateX(-50%) scale(0.92); }
+
+  /* Start / permission screen */
+  #start {
+    position: absolute; inset: 0; z-index: 20;
+    background: #0b0f14; color: #e8eef5;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 28px;
+  }
+  #start h1 { font-size: 26px; margin-bottom: 10px; }
+  #start p { font-size: 15px; line-height: 1.5; color: #9fb0c0; max-width: 320px; margin-bottom: 8px; }
+  #startBtn {
+    margin-top: 26px; padding: 16px 40px; font-size: 18px; font-weight: 700;
+    border: none; border-radius: 14px; background: #16c60c; color: #001b00; cursor: pointer;
+  }
+  #loading { margin-top: 20px; font-size: 14px; color: #ffd166; min-height: 20px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
+  <div id="flash"></div>
+
+  <div id="status">
+    <span id="hits">Hits: 0</span>
+    <span id="lockLabel">Searching…</span>
+  </div>
+
+  <div id="centerMsg"></div>
+  <button id="shoot">SHOOT</button>
+
+  <div id="start">
+    <h1>🔫 War Game — Prototype</h1>
+    <p>Point your phone at a person. When their upper body is under the crosshair, the tag turns green — that means <b>LOCKED</b>.</p>
+    <p>Press <b>SHOOT</b> while locked to score a hit.</p>
+    <button id="startBtn">Start Camera</button>
+    <div id="loading"></div>
+  </div>
+</div>
+
+<!-- On-device AI: TensorFlow.js + COCO-SSD person detector, loaded from free CDN -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script>
+(function () {
+  const video    = document.getElementById('video');
+  const overlay  = document.getElementById('overlay');
+  const ctx      = overlay.getContext('2d');
+  const startScr = document.getElementById('start');
+  const startBtn = document.getElementById('startBtn');
+  const loading  = document.getElementById('loading');
+  const lockLbl  = document.getElementById('lockLabel');
+  const hitsEl   = document.getElementById('hits');
+  const centerMsg= document.getElementById('centerMsg');
+  const shootBtn = document.getElementById('shoot');
+  const flash    = document.getElementById('flash');
+
+  let model = null;
+  let locked = false;         // is an upper-body target under the crosshair right now?
+  let hits = 0;
+  let audioCtx = null;
+
+  // ---- Simple sound via WebAudio (no files needed) ----
+  function beep(freq, durMs, type) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type || 'square';
+      o.frequency.value = freq;
+      o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.25, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durMs / 1000);
+      o.start(); o.stop(audioCtx.currentTime + durMs / 1000);
+    } catch (e) {}
+  }
+
+  function vibrate(pattern) {
+    if (navigator.vibrate) { try { navigator.vibrate(pattern); } catch (e) {} }
+  }
+
+  // ---- Start button: ask camera permission, load model, begin loop ----
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    loading.textContent = 'Requesting camera…';
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }, audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+    } catch (err) {
+      loading.textContent = '❌ Camera blocked. Allow camera access and reload.';
+      startBtn.disabled = false;
+      return;
+    }
+
+    loading.textContent = 'Loading AI target detection…';
+    try {
+      model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    } catch (err) {
+      loading.textContent = '❌ Could not load AI (check internet) — reload to retry.';
+      return;
+    }
+
+    startScr.classList.add('hidden');
+    resizeCanvas();
+    detectLoop();
+  });
+
+  window.addEventListener('resize', resizeCanvas);
+  function resizeCanvas() {
+    overlay.width  = overlay.clientWidth;
+    overlay.height = overlay.clientHeight;
+  }
+
+  // Map a detection box from video pixels to screen pixels (video uses object-fit: cover)
+  function videoToScreen(box, vw, vh, sw, sh) {
+    const scale = Math.max(sw / vw, sh / vh);
+    const dx = (sw - vw * scale) / 2;
+    const dy = (sh - vh * scale) / 2;
+    return {
+      x: box[0] * scale + dx,
+      y: box[1] * scale + dy,
+      w: box[2] * scale,
+      h: box[3] * scale
+    };
+  }
+
+  async function detectLoop() {
+    if (model && video.readyState >= 2) {
+      let predictions = [];
+      try { predictions = await model.detect(video, 8); } catch (e) {}
+
+      const sw = overlay.width, sh = overlay.height;
+      const vw = video.videoWidth || sw, vh = video.videoHeight || sh;
+      const cx = sw / 2, cy = sh / 2;   // crosshair = screen center
+
+      ctx.clearRect(0, 0, sw, sh);
+      locked = false;
+
+      for (const p of predictions) {
+        if (p.class !== 'person' || p.score < 0.5) continue;
+        const b = videoToScreen(p.bbox, vw, vh, sw, sh);
+
+        // "Upper body" = top 45% of the person's box
+        const upperTop = b.y;
+        const upperBottom = b.y + b.h * 0.45;
+        const inX = cx >= b.x && cx <= b.x + b.w;
+        const inUpper = cy >= upperTop && cy <= upperBottom;
+        const isTarget = inX && inUpper;
+        if (isTarget) locked = true;
+
+        // Draw the target box (green if this one is under the crosshair)
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = isTarget ? '#16c60c' : 'rgba(255,255,255,0.5)';
+        ctx.strokeRect(b.x, upperTop, b.w, b.h * 0.45);
+      }
+
+      drawCrosshair(cx, cy, locked);
+      lockLbl.textContent = locked ? 'LOCKED' : 'Searching…';
+      lockLbl.classList.toggle('locked', locked);
+    }
+    requestAnimationFrame(detectLoop);
+  }
+
+  function drawCrosshair(cx, cy, on) {
+    const r = 26, g = 8;
+    ctx.strokeStyle = on ? '#16c60c' : 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.moveTo(cx - r - g, cy); ctx.lineTo(cx - g, cy);
+    ctx.moveTo(cx + g, cy);     ctx.lineTo(cx + r + g, cy);
+    ctx.moveTo(cx, cy - r - g); ctx.lineTo(cx, cy - g);
+    ctx.moveTo(cx, cy + g);     ctx.lineTo(cx, cy + r + g);
+    ctx.stroke();
+  }
+
+  // ---- Shoot ----
+  function showMsg(text, color) {
+    centerMsg.textContent = text;
+    centerMsg.style.color = color;
+    centerMsg.classList.add('show');
+    setTimeout(() => centerMsg.classList.remove('show'), 550);
+  }
+
+  function shoot() {
+    if (locked) {
+      hits++;
+      hitsEl.textContent = 'Hits: ' + hits;
+      showMsg('HIT!', '#16c60c');
+      flash.classList.add('show');
+      setTimeout(() => flash.classList.remove('show'), 90);
+      vibrate([40, 30, 40]);
+      beep(880, 90, 'square');
+    } else {
+      showMsg('miss', '#ffffff');
+      vibrate(15);
+      beep(160, 70, 'sawtooth');
+    }
+  }
+  shootBtn.addEventListener('click', shoot);
+})();
+</script>
+</body>
+</html>
