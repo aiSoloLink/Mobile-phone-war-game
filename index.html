@@ -146,7 +146,7 @@
 const firebaseConfig = {
   apiKey: "AIzaSyCN0gXH8OlCrK1WgHZ3tx45gj8uQFaCfSg",
   authDomain: "iwar-game.firebaseapp.com",
-  databaseURL: "https://iwar-game.firebaseio.com",
+  databaseURL: "https://iwar-game-default-rtdb.firebaseio.com",
   projectId: "iwar-game",
   storageBucket: "iwar-game.firebasestorage.app",
   messagingSenderId: "643951740494",
@@ -219,17 +219,23 @@ const firebaseConfig = {
   $('createBtn').addEventListener('click', async () => {
     myName = $('nameInput').value.trim();
     if (!myName) { $('msg').textContent = 'Please enter your name first.'; return; }
-    roomCode = makeCode();
-    isHost = true;
-    roomRef = db.ref('rooms/' + roomCode);
-    await roomRef.set({
-      created: Date.now(),
-      hostId: myId,
-      status: 'lobby',
-      settings: { energy: 5 },
-      players: {}
-    });
-    await joinRoom();
+    $('msg').textContent = 'Creating game…';
+    try {
+      roomCode = makeCode();
+      isHost = true;
+      roomRef = db.ref('rooms/' + roomCode);
+      await withTimeout(roomRef.set({
+        created: Date.now(),
+        hostId: myId,
+        status: 'lobby',
+        settings: { energy: 5 },
+        players: {}
+      }));
+      await joinRoom();
+      $('msg').textContent = '';
+    } catch (err) {
+      $('msg').textContent = '❌ Could not reach the game server: ' + (err && err.message ? err.message : err);
+    }
   });
 
   $('joinBtn').addEventListener('click', async () => {
@@ -237,14 +243,29 @@ const firebaseConfig = {
     const code = $('codeInput').value.trim().toUpperCase();
     if (!myName) { $('msg').textContent = 'Please enter your name first.'; return; }
     if (code.length !== 4) { $('msg').textContent = 'Enter the 4-letter game code.'; return; }
-    roomCode = code;
-    isHost = false;
-    roomRef = db.ref('rooms/' + roomCode);
-    const snap = await roomRef.get();
-    if (!snap.exists()) { $('msg').textContent = 'Game "' + code + '" not found.'; return; }
-    if (snap.val().status !== 'lobby') { $('msg').textContent = 'That game already started.'; return; }
-    await joinRoom();
+    $('msg').textContent = 'Joining game…';
+    try {
+      roomCode = code;
+      isHost = false;
+      roomRef = db.ref('rooms/' + roomCode);
+      const snap = await withTimeout(roomRef.get());
+      if (!snap.exists()) { $('msg').textContent = 'Game "' + code + '" not found.'; return; }
+      if (snap.val().status !== 'lobby') { $('msg').textContent = 'That game already started.'; return; }
+      await joinRoom();
+      $('msg').textContent = '';
+    } catch (err) {
+      $('msg').textContent = '❌ Could not reach the game server: ' + (err && err.message ? err.message : err);
+    }
   });
+
+  // Fails fast (8s) instead of hanging forever when the server address is wrong
+  function withTimeout(promise) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('no response — check the databaseURL setting')), 8000))
+    ]);
+  }
 
   async function joinRoom() {
     await roomRef.child('players/' + myId).set({ name: myName, energy: -1, alive: true });
