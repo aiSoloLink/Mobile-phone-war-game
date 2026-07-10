@@ -144,7 +144,7 @@
     <button id="createBtn" class="btn btn-dim">Start a NEW game (become host)</button>
 
     <div id="msg"></div>
-    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 3.1 — both phones must show the same version</div>
+    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 3.2 — both phones must show the same version</div>
   </div>
 
   <!-- LOBBY -->
@@ -187,6 +187,7 @@
     <div id="myTeamLine" style="font-size:14px;font-weight:700;margin:4px 0"></div>
     <button id="readyBtn" class="btn btn-blue">Enable GPS + Camera (get ready)</button>
     <div id="lobbyGps" style="font-size:13px;min-height:18px"></div>
+    <button id="gpsRetry" class="btn btn-dim hidden" style="padding:12px">📍 Retry GPS</button>
     <button id="startGameBtn" class="btn btn-green" disabled>Start Game</button>
     <div id="lobbyMsg"></div>
   </div>
@@ -261,6 +262,7 @@ const firebaseConfig = {
   let cameraReady = false, locked = false, gameOver = false;
   let myEnergy = null, maxEnergy = 5, weaponRange = 15, visMode = 'hidden';
   let players = {};          // full player map from server
+  let lastMe = null;         // my latest server state, for re-registering after a disconnect
   let myPos = null;          // {lat, lng, acc}
   let lastPosWrite = 0;
   let audioCtx = null;
@@ -365,6 +367,18 @@ const firebaseConfig = {
       name: myName, team: myTeam, energy: -1, alive: true
     });
     roomRef.child('players/' + myId).onDisconnect().remove();
+
+    // If the phone sleeps or the player switches apps, the server removes them.
+    // When the connection comes back, automatically re-register with the last
+    // known state so nobody vanishes from the game.
+    db.ref('.info/connected').on('value', (s) => {
+      if (s.val() === true && roomRef) {
+        const meRef = roomRef.child('players/' + myId);
+        meRef.set(lastMe || { name: myName, team: myTeam, energy: -1, alive: true });
+        meRef.onDisconnect().remove();
+      }
+    });
+
     $('roomCodeBig').textContent = roomCode;
     $('hostSettings').style.display = isHost ? 'block' : 'none';
     $('startGameBtn').style.display = isHost ? 'block' : 'none';
@@ -440,7 +454,8 @@ const firebaseConfig = {
       (err) => {
         if (err && err.code === 1) {
           setGpsStatus('BLOCKED', false);
-          $('lobbyMsg').textContent = '❌ Location blocked. iPhone: Settings → Privacy & Security → Location Services → Safari Websites → "While Using the App", then reload this page.';
+          $('lobbyMsg').textContent = '❌ Location blocked. iPhone: 1) Settings → Privacy & Security → Location Services → ON, and same page → Safari Websites → "While Using the App". 2) In Safari tap the "aA" (or ⚙) icon in the address bar → Website Settings → Location → Allow. Then press Retry GPS.';
+          $('gpsRetry').classList.remove('hidden');
         } else {
           setGpsStatus('no signal yet…', false);
         }
@@ -448,6 +463,14 @@ const firebaseConfig = {
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
     );
   }
+
+  $('gpsRetry').addEventListener('click', () => {
+    $('gpsRetry').classList.add('hidden');
+    $('lobbyMsg').textContent = '';
+    startGPS();
+  });
+  // tapping the GPS chip during the game also retries
+  $('gpsChip').addEventListener('click', startGPS);
 
   async function loadModel() {
     if (model) return;
@@ -464,7 +487,11 @@ const firebaseConfig = {
     if (!isHost) return;
     let red = 0, blue = 0, count = 0;
     for (const pid in players) { count++; (players[pid].team === 'red') ? red++ : blue++; }
-    $('startGameBtn').disabled = !(cameraReady && model && count >= 2 && red >= 1 && blue >= 1);
+    const btn = $('startGameBtn');
+    if (!cameraReady || !model) { btn.disabled = true; btn.textContent = 'Start Game (press "get ready" first)'; return; }
+    if (count < 2)              { btn.disabled = true; btn.textContent = 'Start Game (waiting for players…)'; return; }
+    if (red < 1 || blue < 1)    { btn.disabled = true; btn.textContent = 'Start Game (need a player on each team)'; return; }
+    btn.disabled = false; btn.textContent = 'Start Game';
   }
 
   $('startGameBtn').addEventListener('click', async () => {
@@ -502,6 +529,7 @@ const firebaseConfig = {
       $('blueList').innerHTML = blueNames.join('<br>') || '—';
       const me = players[myId];
       if (me) {
+        lastMe = me;
         myTeam = me.team;
         $('redBtn').classList.toggle('mine', myTeam === 'red');
         $('blueBtn').classList.toggle('mine', myTeam === 'blue');
