@@ -110,14 +110,16 @@
 
   /* Map overlay */
   #mapOverlay { position: absolute; inset: 0; z-index: 10; background: #0b0f14; }
-  #mapDiv { position: absolute; inset: 0; }
+  /* z-index 0 keeps the map's internal layers from covering our buttons */
+  #mapDiv { position: absolute; inset: 0; z-index: 0; }
   #mapClose {
-    position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 11;
-    padding: 14px 40px; border-radius: 30px; border: 3px solid rgba(255,255,255,0.8);
-    background: #d31027; color: #fff; font-size: 16px; font-weight: 800; cursor: pointer;
+    position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 1100;
+    padding: 18px 34px; border-radius: 30px; border: 3px solid rgba(255,255,255,0.9);
+    background: #d31027; color: #fff; font-size: 17px; font-weight: 800; cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
   }
   #mapLegend {
-    position: absolute; top: 12px; left: 12px; right: 12px; z-index: 11;
+    position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1100;
     padding: 8px 12px; border-radius: 12px; background: rgba(11,15,20,0.85);
     font-size: 12px; line-height: 1.6; text-align: left;
   }
@@ -144,7 +146,7 @@
     <button id="createBtn" class="btn btn-dim">Start a NEW game (become host)</button>
 
     <div id="msg"></div>
-    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 3.2 — both phones must show the same version</div>
+    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 3.3 — both phones must show the same version</div>
   </div>
 
   <!-- LOBBY -->
@@ -212,7 +214,7 @@
     <div id="mapOverlay" class="hidden">
       <div id="mapDiv"></div>
       <div id="mapLegend"></div>
-      <button id="mapClose">CLOSE MAP</button>
+      <button id="mapClose">🔫 BACK TO SHOOTING</button>
     </div>
   </div>
 
@@ -711,19 +713,24 @@ const firebaseConfig = {
     if (!locked) { centerMsg('miss', '#ffffff'); return; }
 
     // candidates: alive players on the OTHER team
-    let victimId = null, victimDist = Infinity;
+    let victimId = null, victimDist = Infinity, victimAllowed = 0;
     for (const pid in players) {
       if (pid === myId) continue;
       const p = players[pid];
       if (!(p.alive && p.energy !== 0)) continue;
       if (p.team === myTeam) continue;              // never hit teammates
-      let d = 0;                                    // unknown position = allow (GPS may be starting up)
-      if (myPos && p.pos) d = metersBetween(myPos, p.pos);
-      if (d < victimDist) { victimDist = d; victimId = pid; }
+      let d = 0, allowed = weaponRange + GPS_BUFFER;
+      if (myPos && p.pos) {
+        d = metersBetween(myPos, p.pos);
+        // GPS on both phones drifts — widen the allowed range by both phones'
+        // reported error so fuzzy GPS never unfairly blocks a real close-range hit
+        allowed += Math.min(40, (myPos.acc || 0) + (p.pos.acc || 0));
+      }
+      if (d < victimDist) { victimDist = d; victimId = pid; victimAllowed = allowed; }
     }
     if (!victimId) { centerMsg('no enemy', '#ffd166'); return; }
-    if (victimDist > weaponRange + GPS_BUFFER) {
-      centerMsg('OUT OF RANGE', '#ffd166');
+    if (victimDist > victimAllowed) {
+      centerMsg('OUT OF RANGE (~' + Math.round(victimDist) + 'm)', '#ffd166');
       return;
     }
 
