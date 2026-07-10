@@ -131,12 +131,20 @@
   <!-- HOME -->
   <div id="home" class="screen">
     <h1>🔫 War Game</h1>
-    <p class="sub">Your phone is the gun. Create a game and share the code, or join a friend's game.</p>
+    <p class="sub">Your phone is the gun.</p>
     <input id="nameInput" maxlength="12" placeholder="Your name" />
-    <button id="createBtn" class="btn btn-green">Create Game</button>
-    <input id="codeInput" maxlength="4" placeholder="4-letter code" style="text-transform:uppercase" />
-    <button id="joinBtn" class="btn btn-blue">Join Game</button>
+
+    <div style="width:100%;max-width:300px;background:#141c26;border-radius:14px;padding:12px;margin:10px 0">
+      <div style="font-size:13px;color:#9fb0c0;margin-bottom:4px">Got a code from a friend? Join their game:</div>
+      <input id="codeInput" maxlength="4" placeholder="4-letter code" style="text-transform:uppercase" />
+      <button id="joinBtn" class="btn btn-blue" style="margin-bottom:0">Join Game</button>
+    </div>
+
+    <div style="font-size:13px;color:#5c6b7a;margin:4px 0">— or —</div>
+    <button id="createBtn" class="btn btn-dim">Start a NEW game (become host)</button>
+
     <div id="msg"></div>
+    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 3.1 — both phones must show the same version</div>
   </div>
 
   <!-- LOBBY -->
@@ -176,7 +184,9 @@
         </select>
       </div>
     </div>
-    <button id="readyBtn" class="btn btn-blue">Enable Camera + GPS (get ready)</button>
+    <div id="myTeamLine" style="font-size:14px;font-weight:700;margin:4px 0"></div>
+    <button id="readyBtn" class="btn btn-blue">Enable GPS + Camera (get ready)</button>
+    <div id="lobbyGps" style="font-size:13px;min-height:18px"></div>
     <button id="startGameBtn" class="btn btn-green" disabled>Start Game</button>
     <div id="lobbyMsg"></div>
   </div>
@@ -307,6 +317,10 @@ const firebaseConfig = {
   $('createBtn').addEventListener('click', async () => {
     myName = $('nameInput').value.trim();
     if (!myName) { $('msg').textContent = 'Please enter your name first.'; return; }
+    if ($('codeInput').value.trim()) {
+      $('msg').textContent = '⚠️ You typed a game code — press "Join Game" above instead. (Or clear the code box to start a NEW game.)';
+      return;
+    }
     $('msg').textContent = 'Creating game…';
     try {
       roomCode = makeCode(); isHost = true;
@@ -381,6 +395,9 @@ const firebaseConfig = {
 
   $('readyBtn').addEventListener('click', async () => {
     $('readyBtn').disabled = true;
+    // GPS FIRST — on iPhone the location prompt only appears reliably when
+    // requested directly from the button tap, before the camera prompt.
+    startGPS();
     $('lobbyMsg').textContent = 'Requesting camera…';
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -394,28 +411,40 @@ const firebaseConfig = {
       $('readyBtn').disabled = false;
       return;
     }
-    $('lobbyMsg').textContent = 'Requesting GPS…';
-    startGPS();
-    $('readyBtn').textContent = '✅ Camera + GPS ready';
+    $('readyBtn').textContent = '✅ Camera ready';
     $('lobbyMsg').textContent = model ? 'Ready! Waiting for game to start…' : 'Loading AI…';
     if (audioCtx === null) beep(1, 1, 'sine'); // unlock audio on user gesture
     updateStartButton();
   });
 
+  function setGpsStatus(text, ok) {
+    $('gpsChip').textContent = text;
+    $('gpsChip').classList.toggle('ok', !!ok);
+    $('lobbyGps').textContent = 'GPS: ' + text;
+    $('lobbyGps').style.color = ok ? '#7ee81a' : '#ffd166';
+  }
+
   function startGPS() {
-    if (!navigator.geolocation) { $('gpsChip').textContent = 'No GPS'; return; }
+    if (!navigator.geolocation) { setGpsStatus('not supported on this phone', false); return; }
+    setGpsStatus('asking permission…', false);
     navigator.geolocation.watchPosition(
       (p) => {
         myPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) };
-        $('gpsChip').textContent = 'GPS ±' + myPos.acc + 'm';
-        $('gpsChip').classList.toggle('ok', myPos.acc <= 25);
+        setGpsStatus('OK ±' + myPos.acc + 'm', myPos.acc <= 25);
         const now = Date.now();
         if (roomRef && now - lastPosWrite > 2000) {   // write at most every 2s
           lastPosWrite = now;
           roomRef.child('players/' + myId + '/pos').set(myPos);
         }
       },
-      () => { $('gpsChip').textContent = 'GPS blocked'; },
+      (err) => {
+        if (err && err.code === 1) {
+          setGpsStatus('BLOCKED', false);
+          $('lobbyMsg').textContent = '❌ Location blocked. iPhone: Settings → Privacy & Security → Location Services → Safari Websites → "While Using the App", then reload this page.';
+        } else {
+          setGpsStatus('no signal yet…', false);
+        }
+      },
       { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
     );
   }
@@ -476,6 +505,8 @@ const firebaseConfig = {
         myTeam = me.team;
         $('redBtn').classList.toggle('mine', myTeam === 'red');
         $('blueBtn').classList.toggle('mine', myTeam === 'blue');
+        $('myTeamLine').textContent = 'You are on the ' + (myTeam === 'red' ? '🔴 RED' : '🔵 BLUE') + ' team (tap a button above to switch)';
+        $('myTeamLine').style.color = myTeam === 'red' ? '#ff6b6b' : '#6ea8ff';
       }
       updateStartButton();
 
