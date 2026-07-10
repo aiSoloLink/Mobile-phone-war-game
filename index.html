@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>War Game — Stage 2</title>
+<title>War Game — Stage 3</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; overflow: hidden; background: #0b0f14; font-family: -apple-system, system-ui, sans-serif; color: #e8eef5; }
@@ -30,13 +31,31 @@
   .btn-dim   { background: #232e3a; color: #cfd9e3; }
   .btn:disabled { opacity: 0.45; }
 
-  #msg { margin-top: 14px; font-size: 14px; color: #ffd166; min-height: 20px; }
+  #msg { margin-top: 14px; font-size: 14px; color: #ffd166; min-height: 20px; max-width: 320px; }
 
   /* Lobby */
-  #roomCodeBig { font-size: 44px; font-weight: 800; letter-spacing: 10px; color: #16c60c; margin: 8px 0 2px; }
-  #playerList { margin: 14px 0; font-size: 17px; line-height: 2; }
-  .settingRow { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
-  .settingRow label { font-size: 15px; color: #9fb0c0; }
+  #lobby { justify-content: flex-start; padding-top: 30px; overflow-y: auto; }
+  #roomCodeBig { font-size: 40px; font-weight: 800; letter-spacing: 9px; color: #16c60c; margin: 4px 0 10px; }
+  .teamPick { display: flex; gap: 10px; width: 100%; max-width: 320px; margin: 4px 0 10px; }
+  .teamBtn {
+    flex: 1; padding: 12px 6px; border-radius: 14px; border: 3px solid transparent;
+    font-size: 15px; font-weight: 800; cursor: pointer; color: #fff;
+  }
+  #redBtn  { background: #7a1420; }
+  #blueBtn { background: #143a7a; }
+  #redBtn.mine  { border-color: #ff4d4d; background: #b01e2e; }
+  #blueBtn.mine { border-color: #6ea8ff; background: #1e56b0; }
+  .teamCols { display: flex; gap: 10px; width: 100%; max-width: 320px; margin-bottom: 8px; }
+  .teamCol { flex: 1; background: #141c26; border-radius: 12px; padding: 10px; min-height: 70px; }
+  .teamCol h3 { font-size: 13px; margin-bottom: 6px; }
+  .teamCol div { font-size: 14px; line-height: 1.8; }
+  #redCol h3 { color: #ff6b6b; } #blueCol h3 { color: #6ea8ff; }
+
+  .settingRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 5px 0; width: 100%; max-width: 320px; }
+  .settingRow label { font-size: 14px; color: #9fb0c0; text-align: left; }
+  .settingRow select { width: 150px; margin: 0; padding: 10px; font-size: 15px; }
+
+  #lobbyMsg { margin-top: 8px; font-size: 14px; color: #ffd166; min-height: 20px; }
 
   /* Game screen */
   #game { padding: 0; display: block; }
@@ -47,20 +66,28 @@
 
   #hud {
     position: absolute; top: 0; left: 0; right: 0; z-index: 5;
-    padding: 12px 14px; display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px;
     background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
     text-shadow: 0 1px 3px rgba(0,0,0,0.8);
   }
-  #energyWrap { flex: 1; margin-right: 12px; }
-  #energyLabel { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
-  #energyBar { height: 14px; border-radius: 8px; background: rgba(0,0,0,0.5); overflow: hidden; border: 1px solid rgba(255,255,255,0.3); }
+  #teamChip { padding: 5px 10px; border-radius: 20px; font-size: 13px; font-weight: 800; }
+  #teamChip.red  { background: #b01e2e; } #teamChip.blue { background: #1e56b0; }
+  #energyWrap { flex: 1; }
+  #energyLabel { font-size: 11px; font-weight: 700; margin-bottom: 3px; }
+  #energyBar { height: 13px; border-radius: 8px; background: rgba(0,0,0,0.5); overflow: hidden; border: 1px solid rgba(255,255,255,0.3); }
   #energyFill { height: 100%; width: 100%; background: linear-gradient(to right, #16c60c, #7ee81a); transition: width 0.3s; }
-  #lockLabel { padding: 5px 12px; border-radius: 20px; background: rgba(0,0,0,0.45); font-size: 14px; font-weight: 700; }
+  #lockLabel { padding: 5px 11px; border-radius: 20px; background: rgba(0,0,0,0.45); font-size: 13px; font-weight: 700; }
   #lockLabel.locked { background: #16c60c; color: #001b00; }
+  #gpsChip {
+    position: absolute; top: 62px; right: 12px; z-index: 5;
+    padding: 4px 10px; border-radius: 14px; background: rgba(0,0,0,0.45);
+    font-size: 11px; font-weight: 700; color: #ffd166;
+  }
+  #gpsChip.ok { color: #7ee81a; }
 
   #centerMsg {
     position: absolute; top: 30%; left: 0; right: 0; z-index: 6;
-    text-align: center; font-size: 58px; font-weight: 800; color: #fff;
+    text-align: center; font-size: 54px; font-weight: 800; color: #fff;
     text-shadow: 0 2px 12px rgba(0,0,0,0.9); opacity: 0; transition: opacity 0.3s;
   }
   #centerMsg.show { opacity: 1; transition: none; }
@@ -74,7 +101,28 @@
   }
   #shoot:active { transform: translateX(-50%) scale(0.92); }
 
-  #endTitle { font-size: 42px; font-weight: 800; margin-bottom: 10px; }
+  #mapBtn {
+    position: absolute; bottom: 52px; left: 22px; z-index: 7;
+    width: 64px; height: 64px; border-radius: 50%;
+    background: rgba(20,28,38,0.9); border: 3px solid rgba(255,255,255,0.7);
+    color: #fff; font-size: 13px; font-weight: 800; cursor: pointer;
+  }
+
+  /* Map overlay */
+  #mapOverlay { position: absolute; inset: 0; z-index: 10; background: #0b0f14; }
+  #mapDiv { position: absolute; inset: 0; }
+  #mapClose {
+    position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 11;
+    padding: 14px 40px; border-radius: 30px; border: 3px solid rgba(255,255,255,0.8);
+    background: #d31027; color: #fff; font-size: 16px; font-weight: 800; cursor: pointer;
+  }
+  #mapLegend {
+    position: absolute; top: 12px; left: 12px; right: 12px; z-index: 11;
+    padding: 8px 12px; border-radius: 12px; background: rgba(11,15,20,0.85);
+    font-size: 12px; line-height: 1.6; text-align: left;
+  }
+
+  #endTitle { font-size: 40px; font-weight: 800; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -94,20 +142,43 @@
   <!-- LOBBY -->
   <div id="lobby" class="screen hidden">
     <h1>Game Lobby</h1>
-    <p class="sub">Share this code with the other player:</p>
     <div id="roomCodeBig">----</div>
-    <div id="playerList"></div>
-    <div class="settingRow" id="energySetting">
-      <label>Hits to eliminate:</label>
-      <select id="energySelect" style="width:90px">
-        <option value="3">3</option>
-        <option value="5" selected>5</option>
-        <option value="10">10</option>
-      </select>
+    <p class="sub" style="margin-bottom:8px">Pick your team:</p>
+    <div class="teamPick">
+      <button id="redBtn" class="teamBtn">🔴 RED</button>
+      <button id="blueBtn" class="teamBtn">🔵 BLUE</button>
     </div>
-    <button id="readyBtn" class="btn btn-blue">Enable Camera (get ready)</button>
+    <div class="teamCols">
+      <div class="teamCol" id="redCol"><h3>RED TEAM</h3><div id="redList"></div></div>
+      <div class="teamCol" id="blueCol"><h3>BLUE TEAM</h3><div id="blueList"></div></div>
+    </div>
+    <div id="hostSettings" style="width:100%;max-width:320px">
+      <div class="settingRow">
+        <label>Hits to eliminate</label>
+        <select id="energySelect">
+          <option value="3">3</option><option value="5" selected>5</option><option value="10">10</option>
+        </select>
+      </div>
+      <div class="settingRow">
+        <label>Space / range</label>
+        <select id="rangeSelect">
+          <option value="8">Indoor (8m)</option>
+          <option value="15" selected>Office (15m)</option>
+          <option value="25">Outdoor (25m)</option>
+        </select>
+      </div>
+      <div class="settingRow">
+        <label>Enemies on map</label>
+        <select id="visSelect">
+          <option value="hidden" selected>Hidden (hard)</option>
+          <option value="flash">Only when near</option>
+          <option value="visible">Always visible</option>
+        </select>
+      </div>
+    </div>
+    <button id="readyBtn" class="btn btn-blue">Enable Camera + GPS (get ready)</button>
     <button id="startGameBtn" class="btn btn-green" disabled>Start Game</button>
-    <div id="lobbyMsg" style="margin-top:10px;font-size:14px;color:#ffd166;min-height:20px;"></div>
+    <div id="lobbyMsg"></div>
   </div>
 
   <!-- GAME -->
@@ -116,14 +187,22 @@
     <canvas id="overlay"></canvas>
     <div id="flash"></div>
     <div id="hud">
+      <span id="teamChip">RED</span>
       <div id="energyWrap">
         <div id="energyLabel">ENERGY</div>
         <div id="energyBar"><div id="energyFill"></div></div>
       </div>
       <span id="lockLabel">Searching…</span>
     </div>
+    <div id="gpsChip">GPS…</div>
     <div id="centerMsg"></div>
+    <button id="mapBtn">MAP</button>
     <button id="shoot">SHOOT</button>
+    <div id="mapOverlay" class="hidden">
+      <div id="mapDiv"></div>
+      <div id="mapLegend"></div>
+      <button id="mapClose">CLOSE MAP</button>
+    </div>
   </div>
 
   <!-- END -->
@@ -141,6 +220,8 @@
 <!-- On-device AI person detection -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<!-- Map -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
 const firebaseConfig = {
@@ -160,31 +241,22 @@ const firebaseConfig = {
     for (const k in screens) screens[k].classList.toggle('hidden', k !== name);
   }
 
-  if (firebaseConfig.apiKey === "PASTE_HERE") {
-    $('msg').textContent = "⚠️ Server not configured yet — the Firebase config must be pasted into this file.";
-    $('createBtn').disabled = true; $('joinBtn').disabled = true;
-    return;
-  }
-
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
 
   // ---------- state ----------
   const myId = 'p_' + Math.random().toString(36).slice(2, 10);
-  let myName = '';
-  let roomCode = '';
-  let isHost = false;
-  let roomRef = null;
-  let model = null;
-  let cameraReady = false;
-  let locked = false;
-  let myEnergy = null;       // last known own energy (for damage detection)
-  let maxEnergy = 5;
-  let alivePlayers = {};     // id -> {name, energy}
-  let gameOver = false;
+  let myName = '', myTeam = null, roomCode = '', isHost = false;
+  let roomRef = null, model = null;
+  let cameraReady = false, locked = false, gameOver = false;
+  let myEnergy = null, maxEnergy = 5, weaponRange = 15, visMode = 'hidden';
+  let players = {};          // full player map from server
+  let myPos = null;          // {lat, lng, acc}
+  let lastPosWrite = 0;
   let audioCtx = null;
+  const GPS_BUFFER = 10;     // extra meters of forgiveness for GPS error
 
-  // ---------- feedback helpers ----------
+  // ---------- feedback ----------
   function beep(freq, durMs, type) {
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -201,11 +273,20 @@ const firebaseConfig = {
     const el = $('centerMsg');
     el.textContent = text; el.style.color = color;
     el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 600);
+    setTimeout(() => el.classList.remove('show'), 650);
   }
   function redFlash() {
     $('flash').classList.add('show');
     setTimeout(() => $('flash').classList.remove('show'), 160);
+  }
+
+  // ---------- distance ----------
+  function metersBetween(a, b) {
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+    const s = Math.sin(dLat / 2) ** 2 +
+      Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(s));
   }
 
   // ---------- HOME ----------
@@ -215,26 +296,29 @@ const firebaseConfig = {
     for (let i = 0; i < 4; i++) c += letters[Math.floor(Math.random() * letters.length)];
     return c;
   }
+  function withTimeout(promise) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('no response from server')), 8000))
+    ]);
+  }
 
   $('createBtn').addEventListener('click', async () => {
     myName = $('nameInput').value.trim();
     if (!myName) { $('msg').textContent = 'Please enter your name first.'; return; }
     $('msg').textContent = 'Creating game…';
     try {
-      roomCode = makeCode();
-      isHost = true;
+      roomCode = makeCode(); isHost = true;
       roomRef = db.ref('rooms/' + roomCode);
       await withTimeout(roomRef.set({
-        created: Date.now(),
-        hostId: myId,
-        status: 'lobby',
-        settings: { energy: 5 },
-        players: {}
+        created: Date.now(), hostId: myId, status: 'lobby',
+        settings: { energy: 5, range: 15, vis: 'hidden' }, players: {}
       }));
       await joinRoom();
       $('msg').textContent = '';
     } catch (err) {
-      $('msg').textContent = '❌ Could not reach the game server: ' + (err && err.message ? err.message : err);
+      $('msg').textContent = '❌ ' + (err && err.message ? err.message : err);
     }
   });
 
@@ -245,8 +329,7 @@ const firebaseConfig = {
     if (code.length !== 4) { $('msg').textContent = 'Enter the 4-letter game code.'; return; }
     $('msg').textContent = 'Joining game…';
     try {
-      roomCode = code;
-      isHost = false;
+      roomCode = code; isHost = false;
       roomRef = db.ref('rooms/' + roomCode);
       const snap = await withTimeout(roomRef.get());
       if (!snap.exists()) { $('msg').textContent = 'Game "' + code + '" not found.'; return; }
@@ -254,34 +337,47 @@ const firebaseConfig = {
       await joinRoom();
       $('msg').textContent = '';
     } catch (err) {
-      $('msg').textContent = '❌ Could not reach the game server: ' + (err && err.message ? err.message : err);
+      $('msg').textContent = '❌ ' + (err && err.message ? err.message : err);
     }
   });
 
-  // Fails fast (8s) instead of hanging forever when the server address is wrong
-  function withTimeout(promise) {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(
-        () => reject(new Error('no response — check the databaseURL setting')), 8000))
-    ]);
-  }
-
   async function joinRoom() {
-    await roomRef.child('players/' + myId).set({ name: myName, energy: -1, alive: true });
+    // auto-assign to the smaller team (player can switch in the lobby)
+    const snap = await roomRef.child('players').get();
+    let red = 0, blue = 0;
+    snap.forEach((p) => { (p.val().team === 'red') ? red++ : blue++; });
+    myTeam = red <= blue ? 'red' : 'blue';
+    await roomRef.child('players/' + myId).set({
+      name: myName, team: myTeam, energy: -1, alive: true
+    });
     roomRef.child('players/' + myId).onDisconnect().remove();
     $('roomCodeBig').textContent = roomCode;
-    $('energySetting').style.display = isHost ? 'flex' : 'none';
+    $('hostSettings').style.display = isHost ? 'block' : 'none';
     $('startGameBtn').style.display = isHost ? 'block' : 'none';
     show('lobby');
     listenToRoom();
-    loadModel(); // preload AI while waiting in lobby
+    loadModel();
   }
 
   // ---------- LOBBY ----------
-  $('energySelect').addEventListener('change', () => {
-    if (isHost) roomRef.child('settings/energy').set(parseInt($('energySelect').value, 10));
-  });
+  $('redBtn').addEventListener('click', () => setTeam('red'));
+  $('blueBtn').addEventListener('click', () => setTeam('blue'));
+  function setTeam(team) {
+    myTeam = team;
+    roomRef.child('players/' + myId + '/team').set(team);
+  }
+
+  function pushSettings() {
+    if (!isHost) return;
+    roomRef.child('settings').set({
+      energy: parseInt($('energySelect').value, 10),
+      range: parseInt($('rangeSelect').value, 10),
+      vis: $('visSelect').value
+    });
+  }
+  $('energySelect').addEventListener('change', pushSettings);
+  $('rangeSelect').addEventListener('change', pushSettings);
+  $('visSelect').addEventListener('change', pushSettings);
 
   $('readyBtn').addEventListener('click', async () => {
     $('readyBtn').disabled = true;
@@ -293,15 +389,36 @@ const firebaseConfig = {
       $('video').srcObject = stream;
       await $('video').play();
       cameraReady = true;
-      $('readyBtn').textContent = '✅ Camera ready';
-      $('lobbyMsg').textContent = model ? 'Ready! Waiting for game to start…' : 'Loading AI…';
-      if (audioCtx === null) beep(1, 1, 'sine'); // unlock audio on user gesture
-      updateStartButton();
     } catch (e) {
       $('lobbyMsg').textContent = '❌ Camera blocked — allow camera access and try again.';
       $('readyBtn').disabled = false;
+      return;
     }
+    $('lobbyMsg').textContent = 'Requesting GPS…';
+    startGPS();
+    $('readyBtn').textContent = '✅ Camera + GPS ready';
+    $('lobbyMsg').textContent = model ? 'Ready! Waiting for game to start…' : 'Loading AI…';
+    if (audioCtx === null) beep(1, 1, 'sine'); // unlock audio on user gesture
+    updateStartButton();
   });
+
+  function startGPS() {
+    if (!navigator.geolocation) { $('gpsChip').textContent = 'No GPS'; return; }
+    navigator.geolocation.watchPosition(
+      (p) => {
+        myPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) };
+        $('gpsChip').textContent = 'GPS ±' + myPos.acc + 'm';
+        $('gpsChip').classList.toggle('ok', myPos.acc <= 25);
+        const now = Date.now();
+        if (roomRef && now - lastPosWrite > 2000) {   // write at most every 2s
+          lastPosWrite = now;
+          roomRef.child('players/' + myId + '/pos').set(myPos);
+        }
+      },
+      () => { $('gpsChip').textContent = 'GPS blocked'; },
+      { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+    );
+  }
 
   async function loadModel() {
     if (model) return;
@@ -314,15 +431,17 @@ const firebaseConfig = {
     }
   }
 
-  let playerCount = 0;
   function updateStartButton() {
-    if (isHost) $('startGameBtn').disabled = !(cameraReady && model && playerCount >= 2);
+    if (!isHost) return;
+    let red = 0, blue = 0, count = 0;
+    for (const pid in players) { count++; (players[pid].team === 'red') ? red++ : blue++; }
+    $('startGameBtn').disabled = !(cameraReady && model && count >= 2 && red >= 1 && blue >= 1);
   }
 
   $('startGameBtn').addEventListener('click', async () => {
-    const energy = parseInt($('energySelect').value, 10);
     const snap = await roomRef.child('players').get();
-    const updates = { status: 'playing', 'settings/energy': energy };
+    const energy = parseInt($('energySelect').value, 10);
+    const updates = { status: 'playing' };
     snap.forEach((p) => { updates['players/' + p.key + '/energy'] = energy; });
     await roomRef.update(updates);
   });
@@ -332,24 +451,35 @@ const firebaseConfig = {
     roomRef.on('value', (snap) => {
       const room = snap.val();
       if (!room) return;
-      maxEnergy = (room.settings && room.settings.energy) || 5;
-      if (!isHost) { $('energySelect').value = String(maxEnergy); }
-
-      // players
-      alivePlayers = {};
-      const names = [];
-      playerCount = 0;
-      for (const pid in (room.players || {})) {
-        const p = room.players[pid];
-        playerCount++;
-        names.push((pid === room.hostId ? '👑 ' : '') + p.name + (pid === myId ? ' (you)' : ''));
-        if (p.alive && p.energy !== 0) alivePlayers[pid] = p;
+      const s = room.settings || {};
+      maxEnergy = s.energy || 5;
+      weaponRange = s.range || 15;
+      visMode = s.vis || 'hidden';
+      if (!isHost) {
+        $('energySelect').value = String(maxEnergy);
+        $('rangeSelect').value = String(weaponRange);
+        $('visSelect').value = visMode;
       }
-      $('playerList').innerHTML = names.join('<br>');
+      players = room.players || {};
+
+      // lobby team lists
+      const redNames = [], blueNames = [];
+      for (const pid in players) {
+        const p = players[pid];
+        let label = p.name + (pid === myId ? ' (you)' : '') + (pid === room.hostId ? ' 👑' : '');
+        (p.team === 'red' ? redNames : blueNames).push(label);
+      }
+      $('redList').innerHTML = redNames.join('<br>') || '—';
+      $('blueList').innerHTML = blueNames.join('<br>') || '—';
+      const me = players[myId];
+      if (me) {
+        myTeam = me.team;
+        $('redBtn').classList.toggle('mine', myTeam === 'red');
+        $('blueBtn').classList.toggle('mine', myTeam === 'blue');
+      }
       updateStartButton();
 
-      // my energy → damage feedback
-      const me = (room.players || {})[myId];
+      // damage feedback + energy bar
       if (me && room.status === 'playing') {
         if (myEnergy !== null && me.energy < myEnergy && me.energy >= 0) {
           redFlash(); vibrate([80, 40, 80]); beep(200, 200, 'sawtooth');
@@ -363,21 +493,37 @@ const firebaseConfig = {
           : 'linear-gradient(to right,#e8590c,#ff2b2b)';
       }
 
-      // screen transitions
       if (room.status === 'playing' && !gameOver) {
         if (me && me.energy === 0) {
-          endGame('☠️ ELIMINATED', 'You ran out of energy. Better luck next time!');
+          endGame('☠️ ELIMINATED', 'You ran out of energy. Watch the map and cheer your team!');
           return;
         }
         if (screens.game.classList.contains('hidden')) {
+          $('teamChip').textContent = (myTeam || '').toUpperCase();
+          $('teamChip').className = myTeam;
+          $('teamChip').id = 'teamChip';
           show('game');
           resizeCanvas();
           detectLoop();
         }
-        // am I the last one standing?
-        const aliveIds = Object.keys(alivePlayers);
-        if (aliveIds.length === 1 && aliveIds[0] === myId && playerCount >= 2) {
-          endGame('🏆 YOU WIN!', 'You are the last player standing.');
+        updateMapMarkers();
+
+        // team victory: only one team has alive players left
+        const aliveTeams = {};
+        let total = 0;
+        for (const pid in players) {
+          total++;
+          const p = players[pid];
+          if (p.alive && p.energy !== 0) aliveTeams[p.team] = true;
+        }
+        const teamsLeft = Object.keys(aliveTeams);
+        if (total >= 2 && teamsLeft.length === 1) {
+          const winner = teamsLeft[0];
+          if (winner === myTeam) {
+            endGame('🏆 ' + winner.toUpperCase() + ' TEAM WINS!', 'Your team is the last one standing!');
+          } else {
+            endGame('💥 ' + winner.toUpperCase() + ' TEAM WINS', 'Your team was eliminated. Rematch?');
+          }
         }
       }
     });
@@ -388,13 +534,65 @@ const firebaseConfig = {
     $('endTitle').textContent = title;
     $('endSub').textContent = sub;
     show('end');
-    if (title.indexOf('WIN') >= 0) { beep(660, 150); setTimeout(() => beep(880, 250), 160); }
+    if (title.indexOf('🏆') >= 0) { beep(660, 150); setTimeout(() => beep(880, 250), 160); }
     else { vibrate([200, 100, 200]); beep(150, 500, 'sawtooth'); }
   }
-
   $('againBtn').addEventListener('click', () => location.reload());
 
-  // ---------- DETECTION (from Stage 1) ----------
+  // ---------- MAP ----------
+  let map = null;
+  const markers = {};   // pid -> Leaflet circleMarker
+
+  $('mapBtn').addEventListener('click', () => {
+    $('mapOverlay').classList.remove('hidden');
+    if (!map) {
+      map = L.map('mapDiv', { zoomControl: false });
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '© OpenStreetMap'
+      }).addTo(map);
+      map.setView(myPos ? [myPos.lat, myPos.lng] : [0, 0], myPos ? 18 : 2);
+    }
+    setTimeout(() => { map.invalidateSize(); if (myPos) map.setView([myPos.lat, myPos.lng], 18); }, 100);
+    updateMapMarkers();
+  });
+  $('mapClose').addEventListener('click', () => $('mapOverlay').classList.add('hidden'));
+
+  function updateMapMarkers() {
+    if (!map) return;
+    const nearLimit = weaponRange * 1.5;
+    const seen = {};
+    let legend = '🔵🔴 You + teammates always shown. ';
+    if (visMode === 'hidden') legend += 'Enemies: HIDDEN — use your eyes!';
+    if (visMode === 'flash') legend += 'Enemies: shown only within ' + Math.round(nearLimit) + 'm.';
+    if (visMode === 'visible') legend += 'Enemies: always shown.';
+    $('mapLegend').textContent = legend;
+
+    for (const pid in players) {
+      const p = players[pid];
+      if (!p.pos || !(p.alive && p.energy !== 0)) continue;
+      let visible = false;
+      if (pid === myId || p.team === myTeam) visible = true;
+      else if (visMode === 'visible') visible = true;
+      else if (visMode === 'flash' && myPos && metersBetween(myPos, p.pos) <= nearLimit) visible = true;
+      if (!visible) continue;
+
+      seen[pid] = true;
+      const color = p.team === 'red' ? '#ff4d4d' : '#2f81f7';
+      if (!markers[pid]) {
+        markers[pid] = L.circleMarker([p.pos.lat, p.pos.lng], {
+          radius: pid === myId ? 10 : 8, color: '#fff', weight: 2,
+          fillColor: color, fillOpacity: 1
+        }).addTo(map).bindTooltip(p.name, { permanent: true, direction: 'top', offset: [0, -10] });
+      } else {
+        markers[pid].setLatLng([p.pos.lat, p.pos.lng]);
+      }
+    }
+    for (const pid in markers) {
+      if (!seen[pid]) { map.removeLayer(markers[pid]); delete markers[pid]; }
+    }
+  }
+
+  // ---------- DETECTION ----------
   const video = $('video'), overlay = $('overlay');
   const ctx = overlay.getContext('2d');
   window.addEventListener('resize', resizeCanvas);
@@ -450,17 +648,26 @@ const firebaseConfig = {
   // ---------- SHOOT ----------
   $('shoot').addEventListener('click', async () => {
     if (gameOver) return;
-    beep(520, 60); vibrate(20); // trigger feel on every shot
+    beep(520, 60); vibrate(20);
     if (!locked) { centerMsg('miss', '#ffffff'); return; }
 
-    // Stage 2: the target is the other alive player (2-player duel).
-    let victimId = null;
-    for (const pid in alivePlayers) {
-      if (pid !== myId) { victimId = pid; break; }
+    // candidates: alive players on the OTHER team
+    let victimId = null, victimDist = Infinity;
+    for (const pid in players) {
+      if (pid === myId) continue;
+      const p = players[pid];
+      if (!(p.alive && p.energy !== 0)) continue;
+      if (p.team === myTeam) continue;              // never hit teammates
+      let d = 0;                                    // unknown position = allow (GPS may be starting up)
+      if (myPos && p.pos) d = metersBetween(myPos, p.pos);
+      if (d < victimDist) { victimDist = d; victimId = pid; }
     }
     if (!victimId) { centerMsg('no enemy', '#ffd166'); return; }
+    if (victimDist > weaponRange + GPS_BUFFER) {
+      centerMsg('OUT OF RANGE', '#ffd166');
+      return;
+    }
 
-    // Server-side: atomically reduce the victim's energy (never below 0)
     const res = await roomRef.child('players/' + victimId + '/energy')
       .transaction((e) => (e === null || e <= 0) ? e : e - 1);
 
