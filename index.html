@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>War Game — Stage 3</title>
+<title>War Game — Stage 4</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -123,6 +123,25 @@
     padding: 8px 12px; border-radius: 12px; background: rgba(11,15,20,0.85);
     font-size: 12px; line-height: 1.6; text-align: left;
   }
+  #toolBar {
+    position: absolute; top: 74px; left: 12px; right: 12px; z-index: 1100;
+  }
+  #toolBar select { width: 100%; margin: 0; padding: 12px; font-size: 15px; }
+  .toolIcon { font-size: 26px; text-align: center; line-height: 30px; text-shadow: 0 2px 6px rgba(0,0,0,0.7); }
+
+  /* Buffs + Tool collecting */
+  #buffRow {
+    position: absolute; top: 62px; left: 12px; z-index: 5;
+    display: flex; gap: 6px; font-size: 13px; font-weight: 800;
+  }
+  #buffRow span {
+    padding: 4px 10px; border-radius: 14px; background: rgba(0,0,0,0.55); color: #ffd166;
+  }
+  #collectMsg {
+    position: absolute; top: 100px; left: 50%; transform: translateX(-50%); z-index: 6;
+    padding: 10px 18px; border-radius: 20px; background: rgba(22,198,12,0.9);
+    color: #001b00; font-size: 16px; font-weight: 800; white-space: nowrap;
+  }
 
   #endTitle { font-size: 40px; font-weight: 800; margin-bottom: 10px; }
 </style>
@@ -146,7 +165,7 @@
     <button id="createBtn" class="btn btn-dim">Start a NEW game (become host)</button>
 
     <div id="msg"></div>
-    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 3.3 — both phones must show the same version</div>
+    <div style="margin-top:14px;font-size:12px;color:#5c6b7a">version 4.0 — both phones must show the same version</div>
   </div>
 
   <!-- LOBBY -->
@@ -185,6 +204,8 @@
           <option value="visible">Always visible</option>
         </select>
       </div>
+      <button id="placeToolsBtn" class="btn btn-dim" style="padding:12px;margin:6px 0">🎁 Place Tools on map (optional)</button>
+      <div id="toolCount" style="font-size:13px;color:#9fb0c0;min-height:18px"></div>
     </div>
     <div id="myTeamLine" style="font-size:14px;font-weight:700;margin:4px 0"></div>
     <button id="readyBtn" class="btn btn-blue">Enable GPS + Camera (get ready)</button>
@@ -208,14 +229,11 @@
       <span id="lockLabel">Searching…</span>
     </div>
     <div id="gpsChip">GPS…</div>
+    <div id="buffRow"></div>
+    <div id="collectMsg" class="hidden"></div>
     <div id="centerMsg"></div>
     <button id="mapBtn">MAP</button>
     <button id="shoot">SHOOT</button>
-    <div id="mapOverlay" class="hidden">
-      <div id="mapDiv"></div>
-      <div id="mapLegend"></div>
-      <button id="mapClose">🔫 BACK TO SHOOTING</button>
-    </div>
   </div>
 
   <!-- END -->
@@ -223,6 +241,21 @@
     <div id="endTitle"></div>
     <p class="sub" id="endSub"></p>
     <button id="againBtn" class="btn btn-green">Back to Home</button>
+  </div>
+
+  <!-- MAP (used in-game, and by the host in the lobby to place Tools) -->
+  <div id="mapOverlay" class="hidden">
+    <div id="mapDiv"></div>
+    <div id="mapLegend"></div>
+    <div id="toolBar" class="hidden">
+      <select id="toolType">
+        <option value="random" selected>🎲 Random Tool</option>
+        <option value="dmg">💪 Strong Gun (2× damage, 60s)</option>
+        <option value="energy">❤️ Energy Pack (+2 energy)</option>
+        <option value="shield">🛡️ Shield (blocks 2 hits)</option>
+      </select>
+    </div>
+    <button id="mapClose">🔫 BACK TO SHOOTING</button>
   </div>
 
 </div>
@@ -269,6 +302,18 @@ const firebaseConfig = {
   let lastPosWrite = 0;
   let audioCtx = null;
   const GPS_BUFFER = 10;     // extra meters of forgiveness for GPS error
+
+  // Tools (power-ups)
+  let tools = {};            // toolId -> {type, lat, lng, takenBy?}
+  let placingTools = false;  // host is tapping the lobby map to place Tools
+  let collectingId = null;   // tool currently being collected
+  let collectingSince = 0;
+  const COLLECT_SECONDS = 5;
+  const TOOL_INFO = {
+    dmg:    { emoji: '💪', name: 'Strong Gun' },
+    energy: { emoji: '❤️', name: 'Energy Pack' },
+    shield: { emoji: '🛡️', name: 'Shield' }
+  };
 
   // ---------- feedback ----------
   function beep(freq, durMs, type) {
@@ -445,8 +490,12 @@ const firebaseConfig = {
     setGpsStatus('asking permission…', false);
     navigator.geolocation.watchPosition(
       (p) => {
+        const firstFix = !myPos;
         myPos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) };
         setGpsStatus('OK ±' + myPos.acc + 'm', myPos.acc <= 25);
+        if (firstFix && map && !$('mapOverlay').classList.contains('hidden')) {
+          map.setView([myPos.lat, myPos.lng], 18);
+        }
         const now = Date.now();
         if (roomRef && now - lastPosWrite > 2000) {   // write at most every 2s
           lastPosWrite = now;
@@ -519,6 +568,11 @@ const firebaseConfig = {
         $('visSelect').value = visMode;
       }
       players = room.players || {};
+      tools = room.tools || {};
+      let toolsLeft = 0, toolsTotal = 0;
+      for (const tid in tools) { toolsTotal++; if (!tools[tid].takenBy) toolsLeft++; }
+      $('toolCount').textContent = toolsTotal ? (toolsTotal + ' Tool(s) placed') : '';
+      updateMapMarkers();
 
       // lobby team lists
       const redNames = [], blueNames = [];
@@ -531,6 +585,12 @@ const firebaseConfig = {
       $('blueList').innerHTML = blueNames.join('<br>') || '—';
       const me = players[myId];
       if (me) {
+        // shield feedback: my shield count dropped = a hit was blocked
+        const prevShield = lastMe ? (lastMe.shield || 0) : 0;
+        if ((me.shield || 0) < prevShield && room.status === 'playing') {
+          vibrate([60, 30, 60]); beep(440, 150, 'triangle');
+          centerMsg('🛡️ BLOCKED!', '#6ea8ff');
+        }
         lastMe = me;
         myTeam = me.team;
         $('redBtn').classList.toggle('mine', myTeam === 'red');
@@ -602,21 +662,41 @@ const firebaseConfig = {
 
   // ---------- MAP ----------
   let map = null;
-  const markers = {};   // pid -> Leaflet circleMarker
+  const markers = {};       // pid -> Leaflet circleMarker
+  const toolMarkers = {};   // toolId -> Leaflet marker
 
-  $('mapBtn').addEventListener('click', () => {
+  function openMap(placing) {
+    placingTools = !!placing;
+    if (placing && !myPos) startGPS();   // host placing Tools before pressing ready
     $('mapOverlay').classList.remove('hidden');
+    $('toolBar').classList.toggle('hidden', !placingTools);
+    $('mapClose').textContent = placingTools ? '✅ DONE placing Tools' : '🔫 BACK TO SHOOTING';
     if (!map) {
       map = L.map('mapDiv', { zoomControl: false });
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19, attribution: '© OpenStreetMap'
       }).addTo(map);
       map.setView(myPos ? [myPos.lat, myPos.lng] : [0, 0], myPos ? 18 : 2);
+      map.on('click', (e) => {
+        if (!placingTools || !roomRef) return;
+        let type = $('toolType').value;
+        if (type === 'random') {
+          const keys = Object.keys(TOOL_INFO);
+          type = keys[Math.floor(Math.random() * keys.length)];
+        }
+        roomRef.child('tools').push({ type: type, lat: e.latlng.lat, lng: e.latlng.lng });
+      });
     }
     setTimeout(() => { map.invalidateSize(); if (myPos) map.setView([myPos.lat, myPos.lng], 18); }, 100);
     updateMapMarkers();
+  }
+
+  $('mapBtn').addEventListener('click', () => openMap(false));
+  $('placeToolsBtn').addEventListener('click', () => openMap(true));
+  $('mapClose').addEventListener('click', () => {
+    placingTools = false;
+    $('mapOverlay').classList.add('hidden');
   });
-  $('mapClose').addEventListener('click', () => $('mapOverlay').classList.add('hidden'));
 
   function updateMapMarkers() {
     if (!map) return;
@@ -626,7 +706,28 @@ const firebaseConfig = {
     if (visMode === 'hidden') legend += 'Enemies: HIDDEN — use your eyes!';
     if (visMode === 'flash') legend += 'Enemies: shown only within ' + Math.round(nearLimit) + 'm.';
     if (visMode === 'visible') legend += 'Enemies: always shown.';
+    if (placingTools) legend = '🎁 Tap the map to place a Tool. Tap a Tool to remove it. Place them in spots players can really reach!';
     $('mapLegend').textContent = legend;
+
+    // Tools: visible to everyone until someone collects them
+    const seenTools = {};
+    for (const tid in tools) {
+      const t = tools[tid];
+      if (t.takenBy) continue;
+      seenTools[tid] = true;
+      if (!toolMarkers[tid]) {
+        const info = TOOL_INFO[t.type] || { emoji: '🎁', name: 'Tool' };
+        toolMarkers[tid] = L.marker([t.lat, t.lng], {
+          icon: L.divIcon({ className: 'toolIcon', html: info.emoji, iconSize: [30, 30] })
+        }).addTo(map).bindTooltip(info.name, { direction: 'top', offset: [0, -12] });
+        toolMarkers[tid].on('click', () => {
+          if (placingTools && isHost) roomRef.child('tools/' + tid).remove();
+        });
+      }
+    }
+    for (const tid in toolMarkers) {
+      if (!seenTools[tid]) { map.removeLayer(toolMarkers[tid]); delete toolMarkers[tid]; }
+    }
 
     for (const pid in players) {
       const p = players[pid];
@@ -734,19 +835,93 @@ const firebaseConfig = {
       return;
     }
 
-    const res = await roomRef.child('players/' + victimId + '/energy')
-      .transaction((e) => (e === null || e <= 0) ? e : e - 1);
+    // Strong Gun buff doubles my damage while active
+    const dmg = (lastMe && lastMe.buffUntil && lastMe.buffUntil > Date.now()) ? 2 : 1;
 
-    if (res.committed && res.snapshot.val() !== null) {
-      const newEnergy = res.snapshot.val();
-      centerMsg('HIT!', '#16c60c');
-      vibrate([40, 30, 40]); beep(880, 90);
-      if (newEnergy <= 0) {
-        await roomRef.child('players/' + victimId + '/alive').set(false);
-        centerMsg('ELIMINATED!', '#ffd166');
+    let outcome = null;
+    const res = await roomRef.child('players/' + victimId).transaction((p) => {
+      if (p === null) return p;
+      if (!p.alive || p.energy <= 0) { outcome = null; return; }  // already down — abort
+      if (p.shield && p.shield > 0) {
+        p.shield -= 1;                       // shield absorbs the whole hit
+        outcome = 'shield';
+      } else {
+        p.energy = Math.max(0, p.energy - dmg);
+        if (p.energy === 0) { p.alive = false; outcome = 'kill'; }
+        else outcome = 'hit';
       }
+      return p;
+    });
+
+    if (res.committed && outcome) {
+      vibrate([40, 30, 40]);
+      if (outcome === 'shield')   { centerMsg('🛡️ BLOCKED', '#6ea8ff'); beep(440, 120, 'triangle'); }
+      else if (outcome === 'kill'){ centerMsg('ELIMINATED!', '#ffd166'); beep(880, 90); }
+      else                        { centerMsg(dmg > 1 ? 'HIT! −2' : 'HIT!', '#16c60c'); beep(880, 90); }
+    } else if (!outcome) {
+      centerMsg('no enemy', '#ffd166');
     }
   });
+
+  // ---------- TOOL PICKUP + BUFF DISPLAY (checked twice a second) ----------
+  setInterval(() => {
+    // buff chips in the HUD
+    let chips = '';
+    if (lastMe) {
+      if ((lastMe.shield || 0) > 0) chips += '<span>🛡️×' + lastMe.shield + '</span>';
+      if (lastMe.buffUntil && lastMe.buffUntil > Date.now()) {
+        chips += '<span>💪 ' + Math.ceil((lastMe.buffUntil - Date.now()) / 1000) + 's</span>';
+      }
+    }
+    $('buffRow').innerHTML = chips;
+
+    // Tool collecting: stand near a Tool for 5 seconds
+    if (gameOver || !myPos || !lastMe || !lastMe.alive || screens.game.classList.contains('hidden')) {
+      collectingId = null; $('collectMsg').classList.add('hidden'); return;
+    }
+    const radius = 8 + Math.min(15, myPos.acc || 15);   // GPS-fuzz-friendly pickup zone
+    let nearId = null, nearDist = Infinity;
+    for (const tid in tools) {
+      const t = tools[tid];
+      if (t.takenBy) continue;
+      const d = metersBetween(myPos, t);
+      if (d <= radius && d < nearDist) { nearDist = d; nearId = tid; }
+    }
+    if (!nearId) { collectingId = null; $('collectMsg').classList.add('hidden'); return; }
+    if (collectingId !== nearId) { collectingId = nearId; collectingSince = Date.now(); }
+
+    const info = TOOL_INFO[tools[nearId].type] || { emoji: '🎁', name: 'Tool' };
+    const secsLeft = Math.max(0, COLLECT_SECONDS - (Date.now() - collectingSince) / 1000);
+    if (secsLeft > 0) {
+      $('collectMsg').textContent = info.emoji + ' ' + info.name + ' — stay here ' + Math.ceil(secsLeft) + 's…';
+      $('collectMsg').classList.remove('hidden');
+    } else {
+      $('collectMsg').classList.add('hidden');
+      collectingId = null;
+      collectTool(nearId);
+    }
+  }, 500);
+
+  async function collectTool(tid) {
+    // first one to claim it on the server wins the race
+    const res = await roomRef.child('tools/' + tid + '/takenBy')
+      .transaction((v) => (v === null ? myId : undefined));
+    if (!res.committed) return;   // someone else grabbed it first
+
+    const type = tools[tid] && tools[tid].type;
+    const info = TOOL_INFO[type] || { emoji: '🎁', name: 'Tool' };
+    if (type === 'energy') {
+      await roomRef.child('players/' + myId + '/energy')
+        .transaction((e) => (e === null || e <= 0) ? e : Math.min(maxEnergy, e + 2));
+    } else if (type === 'shield') {
+      await roomRef.child('players/' + myId + '/shield')
+        .transaction((s) => (s || 0) + 2);
+    } else if (type === 'dmg') {
+      await roomRef.child('players/' + myId + '/buffUntil').set(Date.now() + 60000);
+    }
+    centerMsg(info.emoji + ' GOT ' + info.name.toUpperCase() + '!', '#7ee81a');
+    vibrate([50, 40, 50, 40, 50]); beep(660, 120); setTimeout(() => beep(990, 180), 130);
+  }
 
   show('home');
 })();
